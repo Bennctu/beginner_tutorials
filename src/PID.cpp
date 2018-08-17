@@ -5,6 +5,8 @@
 #include <math.h>
 #include <iostream>
 #define Kp 0.1
+#define Ki 0
+#define Kd 0.1
 
 
 double position_x;
@@ -18,6 +20,19 @@ double Error_thelta;
 double roll;
 double pitch;
 double yaw;
+double yaw_1;
+
+
+bool is_nan(double dVal)
+{
+	if (dVal==dVal)
+		return false;
+
+
+	return true;
+}
+
+
 
 void odometryCallback(const nav_msgs::Odometry::ConstPtr &odomer)
 {
@@ -37,7 +52,17 @@ void odometryCallback(const nav_msgs::Odometry::ConstPtr &odomer)
 	M.getRPY(roll,pitch,yaw);
 	if(yaw < 0)
 		yaw+=2*M_PI;
+	else
+		yaw=yaw;
+
+	
+	if (is_nan(yaw))
+		yaw=yaw_1;
+	else
+		yaw = yaw;
+
 	//ROS_INFO(" now_angle: %f ",yaw);
+	yaw_1 = yaw;
 
 }
 
@@ -71,25 +96,28 @@ int main(int argc, char **argv)
 
 	//p-control
 	double Error_R;
-	double Error_x_p;
-	double Error_y_p;
-	double Error_thelta_p;
-
-	//i-control
-	//double Ki=1;
-	//double Errorxi;
-	//double Erroryi;
-	double t;
-	double t0;
-	t0= ros::Time::now().toSec();
-	//double SumError_x =0;
-	//double SumError_y =0;
-	//d-control
-	//double Kd=0;
-	//double Errorxd;
-	//double Erroryd;
-
+	double linear_p;
+	double angular_p;
 	
+	//i-control
+	double SumError_linear_i=0;
+	double SumError_angular_i=0;
+	double Error_linear_i;
+	double Error_angular_i;
+	double linear_i;
+	double angular_i;
+
+	//d-control
+	double Error_R_last = 0;
+	double Error_thelta_last = 0;
+	double Error_linear_d;
+	double Error_angular_d;
+	double linear_d;
+	double angular_d;
+	
+	double linear_vel;
+	double angular_vel;
+
 	while(ros::ok())
 	{	
 
@@ -97,45 +125,75 @@ int main(int argc, char **argv)
 		Error_y = position_y- y;
 		Error_R = sqrt( pow(Error_x,2) + pow(Error_y,2));
 		thelta = atan2(Error_y,Error_x);
-		if(thelta < 0)
+		if (thelta < 0)
 			thelta+=2*M_PI;
-
 
 		Error_thelta = thelta - yaw;
 
+
+		if ( Error_thelta <0.001)
+			Error_thelta = 0;
+
+
+		ROS_INFO("Error_thelta is %f",Error_thelta);
 		
 
 		//p-control
-		Error_x_p = Kp*Error_R;
-		Error_thelta_p = 5*Kp*Error_thelta;
+		linear_p = Kp*Error_R;
+		angular_p = 5*Kp*Error_thelta;
 
 		//i-control
-		t = ros::Time::now().toSec();
-		double duration = t - t0;
-		//Errorxi = Errorx *duration;
-		//Erroryi = Errory *duration;
-		//SumError_x = SumError_x + Errorxi;
-		//SumError_y = SumError_y + Erroryi;
+		//t = ros::Time::now().toSec();
+		//double duration = t - t0;
+		Error_linear_i = Error_R/10;
+		Error_angular_i = Error_thelta/10;
+		SumError_linear_i = SumError_linear_i + Error_linear_i;
+		SumError_angular_i = SumError_angular_i + Error_angular_i;
+		
+		if (SumError_linear_i >0.1)
+			SumError_linear_i=0.1;
+
+		if (SumError_angular_i>0.1)
+			SumError_angular_i=0.1;
+
+
+		linear_i = Ki*(SumError_linear_i);
+		angular_i = Ki*(SumError_angular_i);
 
 		//d-control
-
-
-
+		Error_linear_d =(Error_R -Error_R_last)*10;
+		Error_angular_d =(Error_thelta -Error_thelta_last)*10;
+		linear_d = Kd*(Error_linear_d);
+		angular_d = Kd*(Error_angular_d);
 
 		
-		move.linear.x = Error_x_p;
-		move.angular.z = Error_thelta_p;
-		velocity_publisher.publish(move);
 
+		Error_R_last = Error_R;
+		Error_thelta_last = Error_thelta;  //stored
+
+
+		//summation
+		linear_vel = linear_p + linear_i + linear_d;
+		angular_vel = angular_p + angular_i + angular_d;
+
+		if (Error_R <0.001)
+			break;
+
+
+		move.linear.x = linear_vel;
+		move.angular.z = angular_vel;
+		velocity_publisher.publish(move);
 		odom_publisher.publish(odomer);
 
-		if ((Error_x == 0) && (Error_y == 0))
-		{
-			move.linear.x = 0.0;
-			move.angular.z = 0.0;
-			velocity_publisher.publish(move);
-	    	break;
-	    }
+
+
+		//if (Error_R <0.01)
+		//{
+		//	move.linear.x = 0.0;
+		//	move.angular.z = 0.0;
+		//	velocity_publisher.publish(move);
+	    //	break;
+	    //}
 
 
         ros::spinOnce();
